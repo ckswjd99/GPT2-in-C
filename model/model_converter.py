@@ -50,13 +50,18 @@ for i in range(12):
     )
     block['attn_wo'] = state_dict[f'h.{i}.attn.c_proj.weight']
     block['attn_bo'] = state_dict[f'h.{i}.attn.c_proj.bias']
+    
+    block['attn_wq'] = block['attn_wq'].permute(1, 0)
+    block['attn_wk'] = block['attn_wk'].permute(1, 0)
+    block['attn_wv'] = block['attn_wv'].permute(1, 0)
+    block['attn_wo'] = block['attn_wo'].permute(1, 0)
 
     block['ln2_w'] = state_dict[f'h.{i}.ln_2.weight']
     block['ln2_b'] = state_dict[f'h.{i}.ln_2.bias']
 
-    block['ffn1_w'] = state_dict[f'h.{i}.mlp.c_fc.weight']
+    block['ffn1_w'] = state_dict[f'h.{i}.mlp.c_fc.weight'].permute(1, 0)
     block['ffn1_b'] = state_dict[f'h.{i}.mlp.c_fc.bias']
-    block['ffn2_w'] = state_dict[f'h.{i}.mlp.c_proj.weight']
+    block['ffn2_w'] = state_dict[f'h.{i}.mlp.c_proj.weight'].permute(1, 0)
     block['ffn2_b'] = state_dict[f'h.{i}.mlp.c_proj.bias']
 
     decoder_blocks.append(block)

@@ -76,12 +76,13 @@ struct decoder_t {
     float *_mem_start;
     float *_buf_embedded;
     float *_buf_ln1;
-    float *_buf_ln1_avg;
+    float *_buf_ln1_temp;
     float *_buf_q;
+    float *_buf_sha;
     float *_buf_o;
     float *_buf_attn;
     float *_buf_ln2;
-    float *_buf_ln2_avg;
+    float *_buf_ln2_temp;
     float *_buf_ffn1;
     float *_buf_ffn2;
 };
@@ -105,12 +106,18 @@ struct GPT2Model_t {
 
     decoder_t **decoders;
 
+    int _num_inferenced_token;
+    
+    float *_buf_rawinput;
+    float *_buf_position_onehot;
     float *_buf_input;
     float *_buf_output;
     float *_buf_swap;
+
 };
 
 GPT2Model_t *new_GPT2Model(int num_decoders, int d_hidden, int d_head, int d_ffn);
 void free_GPT2Model(GPT2Model_t *model);
+void GPT2Model_pre_forward(GPT2Model_t *model);
 int GPT2Model_forward(GPT2Model_t *gpt2model, float *input, float *output);
 void GPT2Model_load(GPT2Model_t *gpt2model, char *weight_path);

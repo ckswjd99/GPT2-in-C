@@ -57,12 +57,13 @@ decoder_t *new_decoder(int d_hidden, int d_head, int d_ffn) {
     // BUFFERS
     decoder->_buf_embedded = mem_last;      mem_last += d_hidden;
     decoder->_buf_ln1 = mem_last;           mem_last += d_hidden;
-    decoder->_buf_ln1_avg = mem_last;       mem_last += d_hidden;
+    decoder->_buf_ln1_temp = mem_last;      mem_last += d_hidden;
     decoder->_buf_q = mem_last;             mem_last += d_hidden;
     decoder->_buf_attn = mem_last;          mem_last += DECODER_NUM_TOKEN_INIT;
+    decoder->_buf_sha = mem_last;           mem_last += d_hidden;
     decoder->_buf_o = mem_last;             mem_last += d_hidden;
     decoder->_buf_ln2 = mem_last;           mem_last += d_hidden;
-    decoder->_buf_ln2_avg = mem_last;       mem_last += d_hidden;
+    decoder->_buf_ln2_temp = mem_last;       mem_last += d_hidden;
     decoder->_buf_ffn1 = mem_last;          mem_last += d_ffn;
     decoder->_buf_ffn2 = mem_last;          mem_last += d_hidden;
 
@@ -88,14 +89,12 @@ void free_decoder(decoder_t *decoder) {
 
 void decoder_pre_forward(decoder_t *decoder) {
     memcpy(decoder->_buf_ln1, decoder->B_ln1, sizeof(float) * decoder->d_hidden);
-    bzero(decoder->_buf_ln1_avg, decoder->d_hidden * sizeof(float));
-    memcpy(decoder->_buf_q, decoder->B_Q, sizeof(float) * decoder->d_hidden);
+    memcpy(decoder->Q, decoder->B_Q, sizeof(float) * decoder->d_hidden);
     memcpy(decoder->K + decoder->_num_inferenced_token * decoder->d_hidden, decoder->B_K, sizeof(float) * decoder->d_hidden);
     memcpy(decoder->V + decoder->_num_inferenced_token * decoder->d_hidden, decoder->B_V, sizeof(float) * decoder->d_hidden);
-    bzero(decoder->_buf_attn, DECODER_NUM_TOKEN_INIT * sizeof(float));
     memcpy(decoder->_buf_o, decoder->B_O, sizeof(float) * decoder->d_hidden);
     memcpy(decoder->_buf_ln2, decoder->B_ln2, sizeof(float) * decoder->d_hidden);
-    memcpy(decoder->_buf_ffn1, decoder->B_ffn1, sizeof(float) * decoder->d_hidden);
+    memcpy(decoder->_buf_ffn1, decoder->B_ffn1, sizeof(float) * decoder->d_ffn);
     memcpy(decoder->_buf_ffn2, decoder->B_ffn2, sizeof(float) * decoder->d_hidden);
 }
 
@@ -122,25 +121,27 @@ void decoder_forward(decoder_t *decoder, float *last_input, float *last_output) 
 
     // Ready for computation
     memcpy(decoder->_buf_embedded, last_input, sizeof(float) * decoder->d_hidden);
+    memcpy(decoder->_buf_ln1, last_input, sizeof(float) * decoder->d_hidden);
 
     // Layer Normalization
-    cblas_sgemv(CblasRowMajor, CblasNoTrans, d_hidden, d_hidden, 1.0/768, decoder->ones, d_hidden, decoder->_buf_embedded, 1, 1.0, decoder->_buf_ln1_avg, 1);   // get average vector
-    cblas_saxpy(d_hidden, -1.0, decoder->_buf_ln1_avg, 1, decoder->_buf_embedded, 1);                                                                           // x <- x-u
-    float ln1_std = sqrtf(cblas_snrm2(d_hidden, decoder->_buf_embedded, 1));                                                                                    // std <- s(x)
-    cblas_ssbmv(CblasRowMajor, CblasUpper, d_hidden, 0, 1.0/ln1_std, decoder->W_ln1, 1, decoder->_buf_embedded, 1, 1.0, decoder->_buf_ln1, 1);                  // ln1_result <- ln1 .* x / std
-    memcpy(decoder->_buf_embedded, decoder->_buf_ln1, sizeof(float) * d_hidden);
+    cblas_sgemv(CblasRowMajor, CblasNoTrans, d_hidden, d_hidden, 1.0/768, decoder->ones, d_hidden, decoder->_buf_embedded, 1, 0.0, decoder->_buf_ln1_temp, 1);   // get average vector
+    cblas_saxpy(d_hidden, -1.0, decoder->_buf_ln1_temp, 1, decoder->_buf_ln1, 1);                                                                           // x <- x-u
+    float ln1_std = cblas_snrm2(d_hidden, decoder->_buf_ln1, 1) / sqrtf(decoder->d_hidden);                                                                                    // std <- s(x)
+    memcpy(decoder->_buf_ln1_temp, decoder->B_ln1, sizeof(float) * d_hidden);
+    cblas_ssbmv(CblasRowMajor, CblasUpper, d_hidden, 0, 1.0/ln1_std, decoder->W_ln1, 1, decoder->_buf_ln1, 1, 1.0, decoder->_buf_ln1_temp, 1);                  // ln1_result <- ln1 .* x / std
+    memcpy(decoder->_buf_ln1, decoder->_buf_ln1_temp, sizeof(float) * d_hidden);
     
     // Compute Q
-    cblas_sgemv(CblasRowMajor, CblasNoTrans, d_hidden, d_hidden, 1.0, W_Q, d_hidden, decoder->_buf_embedded, 1, 1.0, Q, 1);
+    cblas_sgemv(CblasRowMajor, CblasNoTrans, d_hidden, d_hidden, 1.0, W_Q, d_hidden, decoder->_buf_ln1, 1, 1.0, Q, 1);
     
     // Compute K, V
-    cblas_sgemv(CblasRowMajor, CblasNoTrans, d_hidden, d_hidden, 1.0, W_K, d_hidden, decoder->_buf_embedded, 1, 1.0, K + d_hidden * num_inferenced, 1);
-    cblas_sgemv(CblasRowMajor, CblasNoTrans, d_hidden, d_hidden, 1.0, W_V, d_hidden, decoder->_buf_embedded, 1, 1.0, V + d_hidden * num_inferenced, 1);
+    cblas_sgemv(CblasRowMajor, CblasNoTrans, d_hidden, d_hidden, 1.0, W_K, d_hidden, decoder->_buf_ln1, 1, 1.0, K + d_hidden * num_inferenced, 1);
+    cblas_sgemv(CblasRowMajor, CblasNoTrans, d_hidden, d_hidden, 1.0, W_V, d_hidden, decoder->_buf_ln1, 1, 1.0, V + d_hidden * num_inferenced, 1);
 
     // Compute MHA
     for (int i=0; i<d_head; i++) {
         // Attention
-        cblas_sgemv(CblasColMajor, CblasTrans, d_hid_per_head, num_inferenced+1, 1.0/sqrtf(d_hidden), K + i * d_hid_per_head, d_hidden, Q, 1, 1.0, decoder->_buf_attn, 1);
+        cblas_sgemv(CblasColMajor, CblasTrans, d_hid_per_head, num_inferenced+1, 1.0/sqrtf(d_hid_per_head), K + i * d_hid_per_head, d_hidden, Q, 1, 0.0, decoder->_buf_attn, 1);
         
         // Softmax
         float sm_max = 0;
@@ -153,28 +154,39 @@ void decoder_forward(decoder_t *decoder, float *last_input, float *last_output) 
         // TODO: SIMD this.
 
         // SHA
-        cblas_sgemv(CblasColMajor, CblasNoTrans, d_hid_per_head, num_inferenced+1, 1.0, V + i * d_hid_per_head, d_hidden, decoder->_buf_attn, 1, 1.0, decoder->_buf_o + i * d_hid_per_head, 1);
+        cblas_sgemv(CblasColMajor, CblasNoTrans, d_hid_per_head, num_inferenced+1, 1.0, V + i * d_hid_per_head, d_hidden, decoder->_buf_attn, 1, 1.0, decoder->_buf_sha + i * d_hid_per_head, 1);
     }
 
-    // MHA & Residual Connection
-    cblas_sgemv(CblasRowMajor, CblasNoTrans, d_hidden, d_hidden, 1.0, W_O, d_hidden, decoder->_buf_o, 1, 1.0, decoder->_buf_embedded, 1);
+    // MHA
+    cblas_sgemv(CblasRowMajor, CblasNoTrans, d_hidden, d_hidden, 1.0, W_O, d_hidden, decoder->_buf_sha, 1, 1.0, decoder->_buf_o, 1);
+
+    // Residual Connection - raw input
+    cblas_saxpy(d_hidden, 1.0, decoder->_buf_o, 1, decoder->_buf_embedded, 1);
+    memcpy(decoder->_buf_ln2, decoder->_buf_embedded, sizeof(float) * d_hidden);
 
     // Layer Norm
-    cblas_sgemv(CblasRowMajor, CblasNoTrans, d_hidden, d_hidden, 1.0/768, decoder->ones, d_hidden, decoder->_buf_embedded, 1, 1.0, decoder->_buf_ln2_avg, 1);   // get average vector
-    cblas_saxpy(d_hidden, -1.0, decoder->_buf_ln2_avg, 1, decoder->_buf_embedded, 1);                                                                           // x <- x-u
-    float ln2_std = sqrtf(cblas_snrm2(d_hidden, decoder->_buf_embedded, 1));                                                                                    // std <- s(x)
-    cblas_ssbmv(CblasRowMajor, CblasUpper, d_hidden, 0, 1.0/ln2_std, decoder->W_ln1, 1, decoder->_buf_embedded, 1, 1.0, decoder->_buf_ln2, 1);                  // ln1_result <- ln1 .* x / std
-    memcpy(decoder->_buf_embedded, decoder->_buf_ln2, sizeof(float) * d_hidden);
+    cblas_sgemv(CblasRowMajor, CblasNoTrans, d_hidden, d_hidden, 1.0/768, decoder->ones, d_hidden, decoder->_buf_embedded, 1, 0.0, decoder->_buf_ln2_temp, 1);   // get average vector
+    cblas_saxpy(d_hidden, -1.0, decoder->_buf_ln2_temp, 1, decoder->_buf_ln2, 1);                                                                           // x <- x-u
+    float ln2_std = cblas_snrm2(d_hidden, decoder->_buf_ln2, 1) / sqrtf(d_hidden);           
+    memcpy(decoder->_buf_ln2_temp, decoder->B_ln2, sizeof(float) * d_hidden);                                                                         // std <- s(x)
+    cblas_ssbmv(CblasRowMajor, CblasUpper, d_hidden, 0, 1.0/ln2_std, decoder->W_ln2, 1, decoder->_buf_ln2, 1, 1.0, decoder->_buf_ln2_temp, 1);                  // ln1_result <- ln1 .* x / std
+    memcpy(decoder->_buf_ln2, decoder->_buf_ln2_temp, sizeof(float) * d_hidden);
 
     // FFN1
-    cblas_sgemv(CblasRowMajor, CblasNoTrans, d_ffn, d_hidden, 1.0, W_ffn1, d_hidden, decoder->_buf_embedded, 1, 1.0, decoder->_buf_ffn1, 1);
+    cblas_sgemv(CblasRowMajor, CblasNoTrans, d_ffn, d_hidden, 1.0, W_ffn1, d_hidden, decoder->_buf_ln2, 1, 1.0, decoder->_buf_ffn1, 1);
 
     // Activation: GeLU
     // TODO: SIMD this.
-    for (int i=0; i<d_hidden; i++) decoder->_buf_ffn1[i] = 0.5 * decoder->_buf_ffn1[i] * (1 + tanh(sqrt(2.0 / M_PI) * (decoder->_buf_ffn1[i] + 0.044715 * powf(decoder->_buf_ffn1[i], 3))));
+    for (int i=0; i<d_ffn; i++) decoder->_buf_ffn1[i] = 0.5 * decoder->_buf_ffn1[i] * (1 + tanh(sqrt(2.0 / M_PI) * (decoder->_buf_ffn1[i] + 0.044715 * powf(decoder->_buf_ffn1[i], 3))));
 
-    // FFN2 & Residual Connection
-    cblas_sgemv(CblasRowMajor, CblasNoTrans, d_hidden, d_ffn, 1.0, W_ffn2, d_ffn, decoder->_buf_ffn1, 1, 1.0, decoder->_buf_embedded, 1);
+    // FFN2
+    cblas_sgemv(CblasRowMajor, CblasNoTrans, d_hidden, d_ffn, 1.0, W_ffn2, d_ffn, decoder->_buf_ffn1, 1, 1.0, decoder->_buf_ffn2, 1);
+
+    // Residual connection
+    cblas_saxpby(d_hidden, 1.0, decoder->_buf_ffn2, 1, 1.0, decoder->_buf_embedded, 1);
+
+    // Copy output
+    memcpy(last_output, decoder->_buf_embedded, sizeof(float) * d_hidden);
 
     // For next inference
     decoder->_num_inferenced_token++;
@@ -222,9 +234,17 @@ GPT2Model_t *new_GPT2Model(int num_decoders, int d_hidden, int d_head, int d_ffn
         model->decoders[i] = new_decoder(model->d_hidden, model->d_head, model->d_ffn);
     }
 
+    model->_num_inferenced_token = 0;
+
+    model->_buf_rawinput = (float *)malloc(sizeof(float) * GPT2_D_TOKENS);
+    model->_buf_position_onehot = (float *)malloc(sizeof(float) * GPT2_MAX_TOKEN);
+
     model->_buf_input = (float *)malloc(sizeof(float) * model->d_hidden);
     model->_buf_output = (float *)malloc(sizeof(float) * model->d_hidden);
 
+    GPT2Model_pre_forward(model);
+
+    return model;
 }
 
 void free_GPT2Model(GPT2Model_t *model) {
@@ -238,21 +258,61 @@ void free_GPT2Model(GPT2Model_t *model) {
     }
     free(model->decoders);
 
+    free(model->_buf_rawinput);
+    free(model->_buf_position_onehot);
+
     free(model->_buf_input);
     free(model->_buf_output);
 
     free(model);
 }
 
+void GPT2Model_pre_forward(GPT2Model_t *model) {
+    bzero(model->_buf_position_onehot, sizeof(float) * GPT2_MAX_TOKEN);
+
+    // Decoders pre-forward
+    for(int i=0; i<model->num_decoders; i++) {
+        decoder_pre_forward(model->decoders[i]);
+    }
+}
+
 int GPT2Model_forward(GPT2Model_t *model, float *input, float *output) {
-    memcpy(model->_buf_input, input, model->d_hidden);
+    // Convert one-hot input to embedded token
+    // TODO: take simpler approach
+    //   wte and wpe are token-wisely storaged,
+    //   so we don't need to get it through sgemv.
+    memcpy(model->_buf_rawinput, input, sizeof(float) * GPT2_D_TOKENS);
+    
+    cblas_sgemv(
+        CblasRowMajor, CblasTrans, 
+        GPT2_D_TOKENS, model->d_hidden,
+        1.0, model->wte, model->d_hidden,
+        model->_buf_rawinput, 1,
+        0.0, model->_buf_input, 1
+    );
+
+    model->_buf_position_onehot[model->_num_inferenced_token] = 1.0;
+
+    cblas_sgemv(
+        CblasRowMajor, CblasTrans,
+        GPT2_MAX_TOKEN, model->d_hidden,
+        1.0, model->wpe, model->d_hidden,
+        model->_buf_position_onehot, 1,
+        1.0, model->_buf_input, 1
+    );
+
     for (int i=0; i<model->num_decoders; i++) {
         decoder_forward(model->decoders[i], model->_buf_input, model->_buf_output);
         model->_buf_swap = model->_buf_input;
         model->_buf_input = model->_buf_output;
         model->_buf_output = model->_buf_swap;
     }
-    memcpy(output, model->_buf_output, model->d_hidden);
+    memcpy(output, model->_buf_input, sizeof(float) * model->d_hidden);
+
+    // TODO: implement ln_f
+
+    model->_num_inferenced_token++;
+    GPT2Model_pre_forward(model);
 }
 
 float *find_tensor_target_p(GPT2Model_t *model, char *tensor_name) {
@@ -277,53 +337,53 @@ float *find_tensor_target_p(GPT2Model_t *model, char *tensor_name) {
             tensor_name, "dblock_%d.%s\n", &dblock_idx, dblock_subname
         );
         
-        if (strcmp(dblock_subname, "ln1_w")) 
+        if (strcmp(dblock_subname, "ln1_w") == 0) 
             tensor_target_p = model->decoders[dblock_idx]->W_ln1;
         
-        else if (strcmp(dblock_subname, "ln1_b")) 
+        else if (strcmp(dblock_subname, "ln1_b") == 0) 
             tensor_target_p = model->decoders[dblock_idx]->B_ln1;
         
-        else if (strcmp(dblock_subname, "attn_wq")) 
+        else if (strcmp(dblock_subname, "attn_wq") == 0) 
             tensor_target_p = model->decoders[dblock_idx]->W_Q;
         
-        else if (strcmp(dblock_subname, "attn_wk")) 
+        else if (strcmp(dblock_subname, "attn_wk") == 0) 
             tensor_target_p = model->decoders[dblock_idx]->W_K;
         
-        else if (strcmp(dblock_subname, "attn_wv")) 
+        else if (strcmp(dblock_subname, "attn_wv") == 0) 
             tensor_target_p = model->decoders[dblock_idx]->W_V;
         
-        else if (strcmp(dblock_subname, "attn_wo")) 
+        else if (strcmp(dblock_subname, "attn_wo") == 0) 
             tensor_target_p = model->decoders[dblock_idx]->W_O;
         
-        else if (strcmp(dblock_subname, "attn_bq")) 
+        else if (strcmp(dblock_subname, "attn_bq") == 0) 
             tensor_target_p = model->decoders[dblock_idx]->B_Q;
         
-        else if (strcmp(dblock_subname, "attn_bk")) 
+        else if (strcmp(dblock_subname, "attn_bk") == 0) 
             tensor_target_p = model->decoders[dblock_idx]->B_K;
         
-        else if (strcmp(dblock_subname, "attn_bv")) 
+        else if (strcmp(dblock_subname, "attn_bv") == 0) 
             tensor_target_p = model->decoders[dblock_idx]->B_V;
         
-        else if (strcmp(dblock_subname, "attn_bo")) 
+        else if (strcmp(dblock_subname, "attn_bo") == 0) 
             tensor_target_p = model->decoders[dblock_idx]->B_O;
         
-        else if (strcmp(dblock_subname, "ln2_w")) 
+        else if (strcmp(dblock_subname, "ln2_w") == 0) 
             tensor_target_p = model->decoders[dblock_idx]->W_ln2;
         
-        else if (strcmp(dblock_subname, "ln2_b")) 
+        else if (strcmp(dblock_subname, "ln2_b") == 0) 
             tensor_target_p = model->decoders[dblock_idx]->B_ln2;
         
-        else if (strcmp(dblock_subname, "ffn1_w")) 
+        else if (strcmp(dblock_subname, "ffn1_w") == 0) 
             tensor_target_p = model->decoders[dblock_idx]->W_ffn1;
         
-        else if (strcmp(dblock_subname, "ffn1_b")) 
+        else if (strcmp(dblock_subname, "ffn1_b") == 0) 
             tensor_target_p = model->decoders[dblock_idx]->B_ffn1;
         
-        else if (strcmp(dblock_subname, "ffn2_w")) 
+        else if (strcmp(dblock_subname, "ffn2_w") == 0) 
             tensor_target_p = model->decoders[dblock_idx]->W_ffn2;
         
-        else if (strcmp(dblock_subname, "ffn2_b")) 
-            tensor_target_p = model->decoders[dblock_idx]->W_ffn1;
+        else if (strcmp(dblock_subname, "ffn2_b") == 0) 
+            tensor_target_p = model->decoders[dblock_idx]->B_ffn2;
         
         else {
             fprintf(stderr, "Unknown tensor name!\n");
@@ -402,5 +462,7 @@ void GPT2Model_load(GPT2Model_t *model, char *weight_path) {
     fprintf(stdout, "Finished loading weights!\n");
 
     fclose(fp);
+
+    GPT2Model_pre_forward(model);
     return;
 }

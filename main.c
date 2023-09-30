@@ -1,12 +1,12 @@
 #include "gpt2.h"
 
 int main() {
-    float input[GPT2_D_HIDDEN];
-    float output[GPT2_D_HIDDEN];
+    float input[GPT2_D_TOKENS];
+    float output[GPT2_D_TOKENS];
 
-    for (int i=0; i<GPT2_D_HIDDEN; i++) {
-        input[i] = (float)i;
-    }
+    bzero(input, sizeof(float) * GPT2_D_TOKENS);
+
+    input[29193] = 1;
 
     /*
     decoder_t **model = (decoder_t **)malloc(sizeof(decoder_t *) * 12);
