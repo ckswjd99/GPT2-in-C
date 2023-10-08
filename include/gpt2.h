@@ -15,6 +15,10 @@
 #define M_PI                ((float)3.14159265358979323846)
 #endif
 
+#ifndef INT32_MIN
+#define INT32_MIN INT_MIN
+#endif
+
 #include "configs.h"
 
 #define DECODER_NUM_TOKEN_INIT  256

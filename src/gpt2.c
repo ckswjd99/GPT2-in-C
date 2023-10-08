@@ -450,7 +450,7 @@ void GPT2Model_load(GPT2Model_t *model, char *weight_path) {
 
     for (int i=0; i<num_tensor; i++) {
         fgets(read_buffer, LOAD_BUFFER_SIZE, fp);
-        sscanf(read_buffer, "TENSOR:%s\n", &tensor_name);
+        sscanf(read_buffer, "TENSOR:%s\n", tensor_name);
         
         fgets(read_buffer, LOAD_BUFFER_SIZE, fp);
         sscanf(read_buffer, "DATA_SIZE:%d\n", &tensor_size);
