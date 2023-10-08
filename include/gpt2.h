@@ -15,12 +15,7 @@
 #define M_PI                ((float)3.14159265358979323846)
 #endif
 
-#define GPT2_D_TOKENS       50257
-#define GPT2_D_HIDDEN       768
-#define GPT2_D_HEAD         12
-#define GPT2_D_FFN          (768*4)
-#define GPT2_NUM_DECODERS   12
-#define GPT2_MAX_TOKEN      1024
+#include "configs.h"
 
 #define DECODER_NUM_TOKEN_INIT  256
 
@@ -111,6 +106,8 @@ struct GPT2Model_t {
     float *_buf_rawinput;
     float *_buf_position_onehot;
     float *_buf_input;
+    float *_buf_ln_f_temp;
+    float *_buf_ln_f;
     float *_buf_output;
     float *_buf_swap;
 
@@ -121,3 +118,6 @@ void free_GPT2Model(GPT2Model_t *model);
 void GPT2Model_pre_forward(GPT2Model_t *model);
 int GPT2Model_forward(GPT2Model_t *gpt2model, float *input, float *output);
 void GPT2Model_load(GPT2Model_t *gpt2model, char *weight_path);
+
+int vector_argmax(int m, float *x, int incx);
+void vector_onehot(float* dest, int n, int idx);

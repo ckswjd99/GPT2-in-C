@@ -7,6 +7,7 @@ int main() {
     bzero(input, sizeof(float) * GPT2_D_TOKENS);
 
     input[29193] = 1;
+    vector_onehot(input, GPT2_D_TOKENS, 29193);
 
     /*
     decoder_t **model = (decoder_t **)malloc(sizeof(decoder_t *) * 12);
@@ -46,9 +47,11 @@ int main() {
     GPT2Model_load(gpt2_model, "./model/GPT2-124M.mymodel");
 
     gettimeofday(&start_time, NULL);
-    for (int i=0; i<256; i++) {
+    for (int i=0; i<64; i++) {
         GPT2Model_forward(gpt2_model, input, output);
-        memcpy(input, output, 768);
+        int argmax = vector_argmax(GPT2_D_HIDDEN, output, 1);
+        printf("next token: %d\n", argmax);
+        vector_onehot(input, GPT2_D_TOKENS, argmax);
     }
     gettimeofday(&end_time, NULL);
 

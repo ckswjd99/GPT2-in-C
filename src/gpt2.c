@@ -141,20 +141,20 @@ void decoder_forward(decoder_t *decoder, float *last_input, float *last_output) 
     // Compute MHA
     for (int i=0; i<d_head; i++) {
         // Attention
-        cblas_sgemv(CblasColMajor, CblasTrans, d_hid_per_head, num_inferenced+1, 1.0/sqrtf(d_hid_per_head), K + i * d_hid_per_head, d_hidden, Q, 1, 0.0, decoder->_buf_attn, 1);
+        cblas_sgemv(CblasColMajor, CblasTrans, d_hid_per_head, num_inferenced+1, 1.0/sqrtf(d_hid_per_head), K + i * d_hid_per_head, d_hidden, Q + i * d_hid_per_head, 1, 0.0, decoder->_buf_attn, 1);
         
         // Softmax
-        float sm_max = 0;
+        float sm_max = decoder->_buf_attn[0];
         for (int i=0; i<num_inferenced+1; i++) sm_max = (sm_max > decoder->_buf_attn[i] ? sm_max : decoder->_buf_attn[i]);
         float sm_sum = 0;
-        for (int i=0; i<num_inferenced+1; i++) sm_sum += exp2f(decoder->_buf_attn[i] - sm_max);
+        for (int i=0; i<num_inferenced+1; i++) sm_sum += expf(decoder->_buf_attn[i] - sm_max);
         
-        for (int i=0; i<num_inferenced+1; i++) decoder->_buf_attn[i] = exp2f(decoder->_buf_attn[i] - sm_max) / sm_sum;
+        for (int i=0; i<num_inferenced+1; i++) decoder->_buf_attn[i] = expf(decoder->_buf_attn[i] - sm_max) / sm_sum;
 
         // TODO: SIMD this.
 
         // SHA
-        cblas_sgemv(CblasColMajor, CblasNoTrans, d_hid_per_head, num_inferenced+1, 1.0, V + i * d_hid_per_head, d_hidden, decoder->_buf_attn, 1, 1.0, decoder->_buf_sha + i * d_hid_per_head, 1);
+        cblas_sgemv(CblasColMajor, CblasNoTrans, d_hid_per_head, num_inferenced+1, 1.0, V + i * d_hid_per_head, d_hidden, decoder->_buf_attn, 1, 0.0, decoder->_buf_sha + i * d_hid_per_head, 1);
     }
 
     // MHA
@@ -240,6 +240,8 @@ GPT2Model_t *new_GPT2Model(int num_decoders, int d_hidden, int d_head, int d_ffn
     model->_buf_position_onehot = (float *)malloc(sizeof(float) * GPT2_MAX_TOKEN);
 
     model->_buf_input = (float *)malloc(sizeof(float) * model->d_hidden);
+    model->_buf_ln_f = (float *)malloc(sizeof(float) * model->d_hidden);
+    model->_buf_ln_f_temp = (float *)malloc(sizeof(float) * model->d_hidden);
     model->_buf_output = (float *)malloc(sizeof(float) * model->d_hidden);
 
     GPT2Model_pre_forward(model);
@@ -262,6 +264,8 @@ void free_GPT2Model(GPT2Model_t *model) {
     free(model->_buf_position_onehot);
 
     free(model->_buf_input);
+    free(model->_buf_ln_f);
+    free(model->_buf_ln_f_temp);
     free(model->_buf_output);
 
     free(model);
@@ -277,6 +281,9 @@ void GPT2Model_pre_forward(GPT2Model_t *model) {
 }
 
 int GPT2Model_forward(GPT2Model_t *model, float *input, float *output) {
+    // Input: float[GPT2_D_TOKEN], one-hot vector insisting only one token
+    // Output: float[GPT2_D_TOKEN], logits of next token
+
     // Convert one-hot input to embedded token
     // TODO: take simpler approach
     //   wte and wpe are token-wisely storaged,
@@ -307,9 +314,30 @@ int GPT2Model_forward(GPT2Model_t *model, float *input, float *output) {
         model->_buf_input = model->_buf_output;
         model->_buf_output = model->_buf_swap;
     }
-    memcpy(output, model->_buf_input, sizeof(float) * model->d_hidden);
 
-    // TODO: implement ln_f
+    model->_buf_swap = model->_buf_input;
+    model->_buf_input = model->_buf_output;
+    model->_buf_output = model->_buf_swap;
+
+    // Layer Normalization (final)
+    int d_hidden = model->d_hidden;
+
+    memcpy(model->_buf_ln_f, model->_buf_output, sizeof(float) * d_hidden);
+    cblas_sgemv(CblasRowMajor, CblasNoTrans, d_hidden, d_hidden, 1.0/768, model->decoders[0]->ones, d_hidden, model->_buf_output, 1, 0.0, model->_buf_ln_f_temp, 1);    // get average vector
+    cblas_saxpy(d_hidden, -1.0, model->_buf_ln_f_temp, 1, model->_buf_ln_f, 1);                                                                                         // x <- x-u
+    float ln_f_std = cblas_snrm2(d_hidden, model->_buf_ln_f, 1) / sqrtf(d_hidden);                                                                                      // std <- s(x)
+    memcpy(model->_buf_ln_f_temp, model->B_ln_f, sizeof(float) * d_hidden);
+    cblas_ssbmv(CblasRowMajor, CblasUpper, d_hidden, 0, 1.0/ln_f_std, model->W_ln_f, 1, model->_buf_ln_f, 1, 1.0, model->_buf_ln_f_temp, 1);                            // ln1_result <- ln1 .* x / std
+    memcpy(model->_buf_ln_f, model->_buf_ln_f_temp, sizeof(float) * d_hidden);
+
+    // Find the most close token
+    cblas_sgemv(
+        CblasRowMajor, CblasNoTrans, 
+        GPT2_D_TOKENS, model->d_hidden, 
+        1.0, model->wte, model->d_hidden,
+        model->_buf_ln_f, 1,
+        0.0, output, 1    
+    );
 
     model->_num_inferenced_token++;
     GPT2Model_pre_forward(model);
@@ -427,7 +455,7 @@ void GPT2Model_load(GPT2Model_t *model, char *weight_path) {
         fgets(read_buffer, LOAD_BUFFER_SIZE, fp);
         sscanf(read_buffer, "DATA_SIZE:%d\n", &tensor_size);
         
-        printf("  Loading tensor %s(%d)\n", tensor_name, tensor_size);
+        // printf("  Loading tensor %s(%d)\n", tensor_name, tensor_size);
 
         tensor_target_p = find_tensor_target_p(model, tensor_name);
 
@@ -465,4 +493,24 @@ void GPT2Model_load(GPT2Model_t *model, char *weight_path) {
 
     GPT2Model_pre_forward(model);
     return;
+}
+
+int vector_argmax(int m, float *x, int incx) {
+    int arg = 0;
+    float max = INT32_MIN;
+    int idx = 0;
+    for (int i=0; i<m; i++) {
+        if (*(x + i * incx) > max) {
+            max = *(x + i * incx);
+            arg = i;
+        }
+        idx += incx;
+    }
+
+    return arg;
+}
+
+void vector_onehot(float* dest, int n, int idx) {
+    bzero(dest, sizeof(float) * n);
+    dest[idx] = 1;
 }
