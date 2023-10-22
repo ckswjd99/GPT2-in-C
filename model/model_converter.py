@@ -6,7 +6,7 @@ OUTPUT_PATH = './GPT2-124M.mymodel'
 
 if not os.path.exists(INPUT_PATH):
     print('Input file doesn\'t exist. Start Downloading...')
-    os.system(f"wget https://huggingface.co/gpt2/resolve/main/pytorch_model.bin -O {INPUT_PATH} -nv")
+    os.system(f"wget https://huggingface.co/gpt2/resolve/main/pytorch_model.bin -O {INPUT_PATH} -q --show-progress")
 if os.path.exists(OUTPUT_PATH):
     print('Output file already exists. Deleting it...')
     os.system ("rm " + OUTPUT_PATH)
