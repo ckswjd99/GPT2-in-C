@@ -1,15 +1,22 @@
-CC = gcc -g
-OBJDIR = ./obj/
-COMMON= -Iinclude/
-BLASLIB = openblas
+CC=gcc
+OBJDIR=./obj/
+COMMON=-Iinclude/
+BLASLIB=openblas
+DEBUG=1
+OPTS=
+
+ifeq ($(DEBUG), 1)
+	CC+=-g
+	OPTS+=-DDEBUG
+endif
 
 DEPS = $(wildcard src/*.h) $(wildcard include/*.h) Makefile
 
 make: $(OBJDIR)gpt2.o
-	$(CC) $(COMMON) main.c $^ -o gpt2_mine.out -l$(BLASLIB) -lm
+	$(CC) $(COMMON) $(OPTS) main.c $^ -o gpt2_mine.out -l$(BLASLIB) -lm
 
 $(OBJDIR)gpt2.o: $(OBJDIR)
-	$(CC) $(COMMON) src/gpt2.c -c -o $(OBJDIR)gpt2.o -l$(BLASLIB) -lm
+	$(CC) $(COMMON) $(OPTS) src/gpt2.c -c -o $(OBJDIR)gpt2.o -l$(BLASLIB) -lm
 
 $(OBJDIR):
 	mkdir obj

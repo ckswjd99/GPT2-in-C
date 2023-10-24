@@ -57,3 +57,7 @@ __pycache__
 *.mymodel
 *.tmp
 perf.*
+
+temp/
+.vscode/
+*.out.*

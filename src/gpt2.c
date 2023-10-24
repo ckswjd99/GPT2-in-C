@@ -79,6 +79,14 @@ decoder_t *new_decoder(int d_hidden, int d_head, int d_ffn) {
 
     decoder_pre_forward(decoder);
 
+    /* INIT DEBUG */
+    #ifdef DEBUG
+    decoder->_debug_flops_total = 0;
+    decoder->_debug_flops_last = 0;
+    decoder->_debug_eta_total = 0;
+    decoder->_debug_eta_last = 0;
+    #endif
+
     return decoder;
 }
 
@@ -99,6 +107,14 @@ void decoder_pre_forward(decoder_t *decoder) {
 }
 
 void decoder_forward(decoder_t *decoder, float *last_input, float *last_output) {
+
+    /* DEBUG START */
+    #ifdef DEBUG
+    struct timeval start_time, end_time;
+    float eta;
+    unsigned long long flops;
+    gettimeofday(&start_time, NULL);
+    #endif
 
     // For convenience
     int d_hidden = decoder->d_hidden;
@@ -124,8 +140,8 @@ void decoder_forward(decoder_t *decoder, float *last_input, float *last_output) 
     memcpy(decoder->_buf_ln1, last_input, sizeof(float) * decoder->d_hidden);
 
     // Layer Normalization
-    cblas_sgemv(CblasRowMajor, CblasNoTrans, d_hidden, d_hidden, 1.0/768, decoder->ones, d_hidden, decoder->_buf_embedded, 1, 0.0, decoder->_buf_ln1_temp, 1);   // get average vector
-    cblas_saxpy(d_hidden, -1.0, decoder->_buf_ln1_temp, 1, decoder->_buf_ln1, 1);                                                                           // x <- x-u
+    float ln1_avg = cblas_sdot(d_hidden, decoder->ones, 1, decoder->_buf_embedded, 1) / d_hidden;   // get average
+    cblas_saxpy(d_hidden, -ln1_avg, decoder->ones, 1, decoder->_buf_ln1, 1);                                                                           // x <- x-u
     float ln1_std = cblas_snrm2(d_hidden, decoder->_buf_ln1, 1) / sqrtf(decoder->d_hidden);                                                                                    // std <- s(x)
     memcpy(decoder->_buf_ln1_temp, decoder->B_ln1, sizeof(float) * d_hidden);
     cblas_ssbmv(CblasRowMajor, CblasUpper, d_hidden, 0, 1.0/ln1_std, decoder->W_ln1, 1, decoder->_buf_ln1, 1, 1.0, decoder->_buf_ln1_temp, 1);                  // ln1_result <- ln1 .* x / std
@@ -165,8 +181,8 @@ void decoder_forward(decoder_t *decoder, float *last_input, float *last_output) 
     memcpy(decoder->_buf_ln2, decoder->_buf_embedded, sizeof(float) * d_hidden);
 
     // Layer Norm
-    cblas_sgemv(CblasRowMajor, CblasNoTrans, d_hidden, d_hidden, 1.0/768, decoder->ones, d_hidden, decoder->_buf_embedded, 1, 0.0, decoder->_buf_ln2_temp, 1);   // get average vector
-    cblas_saxpy(d_hidden, -1.0, decoder->_buf_ln2_temp, 1, decoder->_buf_ln2, 1);                                                                           // x <- x-u
+    float ln2_avg = cblas_sdot(d_hidden, decoder->ones, 1, decoder->_buf_embedded, 1) / d_hidden;   // get average
+    cblas_saxpy(d_hidden, -ln2_avg, decoder->ones, 1, decoder->_buf_ln2, 1);                                                                           // x <- x-u
     float ln2_std = cblas_snrm2(d_hidden, decoder->_buf_ln2, 1) / sqrtf(d_hidden);           
     memcpy(decoder->_buf_ln2_temp, decoder->B_ln2, sizeof(float) * d_hidden);                                                                         // std <- s(x)
     cblas_ssbmv(CblasRowMajor, CblasUpper, d_hidden, 0, 1.0/ln2_std, decoder->W_ln2, 1, decoder->_buf_ln2, 1, 1.0, decoder->_buf_ln2_temp, 1);                  // ln1_result <- ln1 .* x / std
@@ -177,13 +193,18 @@ void decoder_forward(decoder_t *decoder, float *last_input, float *last_output) 
 
     // Activation: GeLU
     // TODO: SIMD this.
-    for (int i=0; i<d_ffn; i++) decoder->_buf_ffn1[i] = 0.5 * decoder->_buf_ffn1[i] * (1 + tanh(sqrt(2.0 / M_PI) * (decoder->_buf_ffn1[i] + 0.044715 * powf(decoder->_buf_ffn1[i], 3))));
+    for (int i=0; i<d_ffn; i+=4) {
+        decoder->_buf_ffn1[i] = 0.5 * decoder->_buf_ffn1[i] * (1 + tanh(sqrt(2.0 / M_PI) * (decoder->_buf_ffn1[i] + 0.044715 * powf(decoder->_buf_ffn1[i], 3))));
+        decoder->_buf_ffn1[i+1] = 0.5 * decoder->_buf_ffn1[i+1] * (1 + tanh(sqrt(2.0 / M_PI) * (decoder->_buf_ffn1[i+1] + 0.044715 * powf(decoder->_buf_ffn1[i+1], 3))));
+        decoder->_buf_ffn1[i+2] = 0.5 * decoder->_buf_ffn1[i+2] * (1 + tanh(sqrt(2.0 / M_PI) * (decoder->_buf_ffn1[i+2] + 0.044715 * powf(decoder->_buf_ffn1[i+2], 3))));
+        decoder->_buf_ffn1[i+3] = 0.5 * decoder->_buf_ffn1[i+3] * (1 + tanh(sqrt(2.0 / M_PI) * (decoder->_buf_ffn1[i+3] + 0.044715 * powf(decoder->_buf_ffn1[i+3], 3))));
+    }
 
     // FFN2
     cblas_sgemv(CblasRowMajor, CblasNoTrans, d_hidden, d_ffn, 1.0, W_ffn2, d_ffn, decoder->_buf_ffn1, 1, 1.0, decoder->_buf_ffn2, 1);
 
     // Residual connection
-    cblas_saxpby(d_hidden, 1.0, decoder->_buf_ffn2, 1, 1.0, decoder->_buf_embedded, 1);
+    cblas_saxpy(d_hidden, 1.0, decoder->_buf_ffn2, 1, decoder->_buf_embedded, 1);
 
     // Copy output
     memcpy(last_output, decoder->_buf_embedded, sizeof(float) * d_hidden);
@@ -191,6 +212,23 @@ void decoder_forward(decoder_t *decoder, float *last_input, float *last_output) 
     // For next inference
     decoder->_num_inferenced_token++;
     decoder_pre_forward(decoder);
+
+    /* DEBUG FINISH */
+    #ifdef DEBUG
+    gettimeofday(&end_time, NULL);
+    eta = ((end_time.tv_sec * 1e6 + end_time.tv_usec) - (start_time.tv_sec * 1e6 + start_time.tv_usec)) / 1e3;
+    flops = (
+        d_hidden * d_hidden * 4
+        + d_hid_per_head * num_inferenced * 2 * d_head
+        + d_hidden * d_hidden * 2
+        + d_ffn * d_hidden * 2
+    ) * 2;
+
+    decoder->_debug_flops_total += flops;
+    decoder->_debug_flops_last = flops;
+    decoder->_debug_eta_total += eta;
+    decoder->_debug_eta_last = eta;
+    #endif
 }
 
 void decoder_set_debug_weight(decoder_t *decoder) {
@@ -280,7 +318,7 @@ void GPT2Model_pre_forward(GPT2Model_t *model) {
     }
 }
 
-int GPT2Model_forward(GPT2Model_t *model, float *input, float *output) {
+int GPT2Model_forward(GPT2Model_t *model, int input_idx, float *output) {
     // Input: float[GPT2_D_TOKEN], one-hot vector insisting only one token
     // Output: float[GPT2_D_TOKEN], logits of next token
 
@@ -288,25 +326,16 @@ int GPT2Model_forward(GPT2Model_t *model, float *input, float *output) {
     // TODO: take simpler approach
     //   wte and wpe are token-wisely storaged,
     //   so we don't need to get it through sgemv.
-    memcpy(model->_buf_rawinput, input, sizeof(float) * GPT2_D_TOKENS);
-    
-    cblas_sgemv(
-        CblasRowMajor, CblasTrans, 
-        GPT2_D_TOKENS, model->d_hidden,
-        1.0, model->wte, model->d_hidden,
-        model->_buf_rawinput, 1,
-        0.0, model->_buf_input, 1
-    );
 
-    model->_buf_position_onehot[model->_num_inferenced_token] = 1.0;
+    /* DEBUG START */
+    #ifdef DEBUG
+    struct timeval start_time, end_time;
+    float eta;
+    gettimeofday(&start_time, NULL);
+    #endif
 
-    cblas_sgemv(
-        CblasRowMajor, CblasTrans,
-        GPT2_MAX_TOKEN, model->d_hidden,
-        1.0, model->wpe, model->d_hidden,
-        model->_buf_position_onehot, 1,
-        1.0, model->_buf_input, 1
-    );
+    memcpy(model->_buf_input, &model->wte[model->d_hidden * input_idx], sizeof(float) * model->d_hidden);
+    cblas_saxpy(model->d_hidden, 1.0, &model->wpe[model->d_hidden * model->_num_inferenced_token], 1, model->_buf_input, 1);
 
     for (int i=0; i<model->num_decoders; i++) {
         decoder_forward(model->decoders[i], model->_buf_input, model->_buf_output);
@@ -323,8 +352,8 @@ int GPT2Model_forward(GPT2Model_t *model, float *input, float *output) {
     int d_hidden = model->d_hidden;
 
     memcpy(model->_buf_ln_f, model->_buf_output, sizeof(float) * d_hidden);
-    cblas_sgemv(CblasRowMajor, CblasNoTrans, d_hidden, d_hidden, 1.0/768, model->decoders[0]->ones, d_hidden, model->_buf_output, 1, 0.0, model->_buf_ln_f_temp, 1);    // get average vector
-    cblas_saxpy(d_hidden, -1.0, model->_buf_ln_f_temp, 1, model->_buf_ln_f, 1);                                                                                         // x <- x-u
+    float ln_f_avg = cblas_sdot(d_hidden, model->decoders[0]->ones, 1, model->_buf_ln_f, 1) / d_hidden;   // get average
+    cblas_saxpy(d_hidden, -ln_f_avg, model->decoders[0]->ones, 1, model->_buf_ln_f, 1);                                                                                 // x <- x-u
     float ln_f_std = cblas_snrm2(d_hidden, model->_buf_ln_f, 1) / sqrtf(d_hidden);                                                                                      // std <- s(x)
     memcpy(model->_buf_ln_f_temp, model->B_ln_f, sizeof(float) * d_hidden);
     cblas_ssbmv(CblasRowMajor, CblasUpper, d_hidden, 0, 1.0/ln_f_std, model->W_ln_f, 1, model->_buf_ln_f, 1, 1.0, model->_buf_ln_f_temp, 1);                            // ln1_result <- ln1 .* x / std
@@ -341,6 +370,15 @@ int GPT2Model_forward(GPT2Model_t *model, float *input, float *output) {
 
     model->_num_inferenced_token++;
     GPT2Model_pre_forward(model);
+
+    /* DEBUG FINISH */
+    #ifdef DEBUG
+    gettimeofday(&end_time, NULL);
+    eta = ((end_time.tv_sec * 1e6 + end_time.tv_usec) - (start_time.tv_sec * 1e6 + start_time.tv_usec)) / 1e3;
+
+    model->_debug_eta_total += eta;
+    model->_debug_eta_last = eta;
+    #endif
 }
 
 float *find_tensor_target_p(GPT2Model_t *model, char *tensor_name) {

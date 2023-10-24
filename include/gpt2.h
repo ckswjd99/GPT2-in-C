@@ -37,7 +37,7 @@ struct decoder_t {
 
     /* PARAMS */
     // Utils
-    float *ones;    // [768, 768], filled with 1
+    float *ones;        // [768], filled with 1
 
     // Layer Normalization 1
     float *W_ln1;       // [768]
@@ -84,6 +84,14 @@ struct decoder_t {
     float *_buf_ln2_temp;
     float *_buf_ffn1;
     float *_buf_ffn2;
+
+    /* DEBUG */
+    #ifdef DEBUG
+    unsigned long long _debug_flops_total;
+    unsigned long long _debug_flops_last;
+    float _debug_eta_total;   // (msec)
+    float _debug_eta_last;    // (msec)
+    #endif
 };
 
 decoder_t *new_decoder(int d_hidden, int d_head, int d_ffn);
@@ -115,12 +123,17 @@ struct GPT2Model_t {
     float *_buf_output;
     float *_buf_swap;
 
+    /* DEBUG */
+    #ifdef DEBUG
+    float _debug_eta_total;
+    float _debug_eta_last;
+    #endif
 };
 
 GPT2Model_t *new_GPT2Model(int num_decoders, int d_hidden, int d_head, int d_ffn);
 void free_GPT2Model(GPT2Model_t *model);
 void GPT2Model_pre_forward(GPT2Model_t *model);
-int GPT2Model_forward(GPT2Model_t *gpt2model, float *input, float *output);
+int GPT2Model_forward(GPT2Model_t *gpt2model, int input_idx, float *output);
 void GPT2Model_load(GPT2Model_t *gpt2model, char *weight_path);
 
 int vector_argmax(int m, float *x, int incx);
