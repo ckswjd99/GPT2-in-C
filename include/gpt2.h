@@ -20,6 +20,7 @@
 #endif
 
 #include "configs.h"
+#include "operation.h"
 
 #define DECODER_NUM_TOKEN_INIT  256
 
