@@ -19,7 +19,7 @@ int main(int argc, char *argv[]) {
     openblas_set_num_threads(1);
 
     int argmax;
-    float output[GPT2_D_TOKENS];
+    float output[GPT2_D_VOCABS];
 
     argmax = 29193;
 
@@ -27,16 +27,10 @@ int main(int argc, char *argv[]) {
 
     GPT2Model_t *gpt2_model = new_GPT2Model(GPT2_NUM_DECODERS, GPT2_D_HIDDEN, GPT2_D_HEAD, GPT2_D_FFN);
 
-    decoder_set_debug_weight(gpt2_model->decoders[0]);
-
     GPT2Model_load(gpt2_model, "./model/GPT2-124M.mymodel");
 
     gettimeofday(&start_time, NULL);
-    for (int i=0; i<gen_length; i++) {
-        GPT2Model_forward(gpt2_model, argmax, output);
-        argmax = vector_argmax(GPT2_D_HIDDEN, output, 1);
-        printf("next token: %d\n", argmax);
-    }
+    GPT2Model_sample(gpt2_model, NULL, gen_length, 0, 0, 0, 0, 0);
     gettimeofday(&end_time, NULL);
 
     printf("Inferenced with GPT2Model\n");

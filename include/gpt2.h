@@ -5,21 +5,23 @@
 #include <math.h>
 #include <limits.h>
 
+#define GPT2_D_VOCABS       50257
+#define GPT2_D_HIDDEN       768
+#define GPT2_D_HEAD         12
+#define GPT2_D_FFN          (768*4)
+#define GPT2_NUM_DECODERS   12
+#define GPT2_MAX_TOKEN      1024
+
 #ifdef CBLAS_ATLAS
 #include <cblas-atlas.h>
 #else
 #include <cblas.h>
 #endif
 
-#ifndef M_PI
-#define M_PI                ((float)3.14159265358979323846)
-#endif
-
 #ifndef INT32_MIN
 #define INT32_MIN INT_MIN
 #endif
 
-#include "configs.h"
 #include "operation.h"
 
 #define DECODER_NUM_TOKEN_INIT  256
@@ -97,9 +99,7 @@ struct decoder_t {
 
 decoder_t *new_decoder(int d_hidden, int d_head, int d_ffn);
 void free_decoder(decoder_t *decoder);
-void decoder_pre_forward(decoder_t *decoder);
 void decoder_forward(decoder_t *decoder, float *last_input, float *last_output);
-void decoder_set_debug_weight(decoder_t *decoder);
 
 struct GPT2Model_t {
     int num_decoders;
@@ -133,9 +133,13 @@ struct GPT2Model_t {
 
 GPT2Model_t *new_GPT2Model(int num_decoders, int d_hidden, int d_head, int d_ffn);
 void free_GPT2Model(GPT2Model_t *model);
-void GPT2Model_pre_forward(GPT2Model_t *model);
-int GPT2Model_forward(GPT2Model_t *gpt2model, int input_idx, float *output);
-void GPT2Model_load(GPT2Model_t *gpt2model, char *weight_path);
 
-int vector_argmax(int m, float *x, int incx);
-void vector_onehot(float* dest, int n, int idx);
+void GPT2Model_sample(
+    GPT2Model_t *model, 
+    char *text, int length, int num_samples, int batch_size, 
+    float temperature, int top_k, int num_beam
+);
+void GPT2Model_encode(GPT2Model_t *model, int vocab_idx, float *embedded);
+void GPT2Model_forward(GPT2Model_t *model, float *input_embed, float *output_embed);
+void GPT2Model_decode(GPT2Model_t *model, float *embedded, float *logits);
+void GPT2Model_load(GPT2Model_t *model, char *weight_path);

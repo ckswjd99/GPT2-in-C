@@ -1,13 +1,57 @@
 #include "operation.h"
 
-static void fast_sgemv_neon(unsigned int M, unsigned int N, float alpha, float *mat, float *vec, float beta, float *out);
+void layer_normalize(int N, float *vector, float *W, float *B, float *buf_sizeN, float *ones) {
+    float avg = cblas_sdot(N, ones, 1, vector, 1) / N;
+    cblas_saxpy(N, -avg, ones, 1, vector, 1);
+    float std = cblas_snrm2(N, vector, 1) / sqrtf(N);
+    memcpy(buf_sizeN, B, sizeof(float) * N);
+    cblas_ssbmv(CblasRowMajor, CblasUpper, N, 0, 1.0/std, W, 1, vector, 1, 1.0, buf_sizeN, 1);
+    memcpy(vector, buf_sizeN, sizeof(float) * N);
+}
 
-void fast_sgemv(unsigned int M, unsigned int N, float alpha, float *mat, float *vec, float beta, float *out) {
-    if (N % 64 == 0) {
-        fast_sgemv_neon(M, N, alpha, mat, vec, beta, out);
-    } else {
-        cblas_sgemv(CblasRowMajor, CblasNoTrans, M, N, alpha, mat, N, vec, 1, beta, out, 1);
+void layer_linear(int M, int N, float *input, float *W, float *B, float *output) {
+    memcpy(output, B, sizeof(float) * M);
+    cblas_sgemv(CblasRowMajor, CblasNoTrans, M, N, 1.0, W, N, input, 1, 1.0, output, 1);
+}
+
+void layer_softmax(int N, float *vector) {
+    // TODO: SIMD this.
+    
+    float sm_max = vector[0];
+    float sm_sum = 0;
+
+    for (int i=0; i<N; i++) sm_max = (sm_max > vector[i] ? sm_max : vector[i]);
+    for (int i=0; i<N; i++) sm_sum += expf(vector[i] - sm_max);
+    for (int i=0; i<N; i++) vector[i] = expf(vector[i] - sm_max) / sm_sum;
+}
+
+void layer_GeLU(int N, float *vector) {
+    for (int i=0; i<N; i+=4) {
+        vector[i] = 0.5 * vector[i] * (1 + tanh(sqrt(2.0 / M_PI) * (vector[i] + 0.044715 * powf(vector[i], 3))));
+        vector[i+1] = 0.5 * vector[i+1] * (1 + tanh(sqrt(2.0 / M_PI) * (vector[i+1] + 0.044715 * powf(vector[i+1], 3))));
+        vector[i+2] = 0.5 * vector[i+2] * (1 + tanh(sqrt(2.0 / M_PI) * (vector[i+2] + 0.044715 * powf(vector[i+2], 3))));
+        vector[i+3] = 0.5 * vector[i+3] * (1 + tanh(sqrt(2.0 / M_PI) * (vector[i+3] + 0.044715 * powf(vector[i+3], 3))));
     }
+}
+
+int vector_argmax(int m, float *x, int incx) {
+    int arg = 0;
+    float max = INT32_MIN;
+    int idx = 0;
+    for (int i=0; i<m; i++) {
+        if (*(x + i * incx) > max) {
+            max = *(x + i * incx);
+            arg = i;
+        }
+        idx += incx;
+    }
+
+    return arg;
+}
+
+void vector_onehot(float* dest, int n, int idx) {
+    bzero(dest, sizeof(float) * n);
+    dest[idx] = 1;
 }
 
 void fast_sgemv_neon(unsigned int M, unsigned int N, float alpha, float *mat, float *vec, float beta, float *out) {
@@ -102,5 +146,12 @@ void fast_sgemv_neon(unsigned int M, unsigned int N, float alpha, float *mat, fl
     "v16", "v17", "v18", "v19", "v20", "v21", "v22","v23",
     "v24", "v25", "v26", "v27", "v28", "v29", "v30", "v31"
     );
+}
 
+void fast_sgemv(unsigned int M, unsigned int N, float alpha, float *mat, float *vec, float beta, float *out) {
+    if (0) {
+        fast_sgemv_neon(M, N, alpha, mat, vec, beta, out);
+    } else {
+        cblas_sgemv(CblasRowMajor, CblasNoTrans, M, N, alpha, mat, N, vec, 1, beta, out, 1);
+    }
 }

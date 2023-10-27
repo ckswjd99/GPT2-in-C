@@ -75,8 +75,6 @@ decoder_t *new_decoder(int d_hidden, int d_head, int d_ffn) {
         decoder->ones[i] = 1.0;
     }
 
-    decoder_pre_forward(decoder);
-
     /* INIT DEBUG */
     #ifdef DEBUG
     decoder->_debug_flops_total = 0;
@@ -91,17 +89,6 @@ decoder_t *new_decoder(int d_hidden, int d_head, int d_ffn) {
 void free_decoder(decoder_t *decoder) {
     free(decoder->_mem_start);
     free(decoder);
-}
-
-void decoder_pre_forward(decoder_t *decoder) {
-    memcpy(decoder->_buf_ln1, decoder->B_ln1, sizeof(float) * decoder->d_hidden);
-    memcpy(decoder->Q, decoder->B_Q, sizeof(float) * decoder->d_hidden);
-    memcpy(decoder->K + decoder->_num_inferenced_token * decoder->d_hidden, decoder->B_K, sizeof(float) * decoder->d_hidden);
-    memcpy(decoder->V + decoder->_num_inferenced_token * decoder->d_hidden, decoder->B_V, sizeof(float) * decoder->d_hidden);
-    memcpy(decoder->_buf_o, decoder->B_O, sizeof(float) * decoder->d_hidden);
-    memcpy(decoder->_buf_ln2, decoder->B_ln2, sizeof(float) * decoder->d_hidden);
-    memcpy(decoder->_buf_ffn1, decoder->B_ffn1, sizeof(float) * decoder->d_ffn);
-    memcpy(decoder->_buf_ffn2, decoder->B_ffn2, sizeof(float) * decoder->d_hidden);
 }
 
 void decoder_forward(decoder_t *decoder, float *last_input, float *last_output) {
@@ -122,36 +109,28 @@ void decoder_forward(decoder_t *decoder, float *last_input, float *last_output) 
 
     int num_inferenced = decoder->_num_inferenced_token;
 
-    float *W_Q = decoder->W_Q;
-    float *W_K = decoder->W_K;
-    float *W_V = decoder->W_V;
-    float *W_O = decoder->W_O;
-    float *W_ffn1 = decoder->W_ffn1;
-    float *W_ffn2 = decoder->W_ffn2;
+    float *W_Q = decoder->W_Q, *W_K = decoder->W_K, *W_V = decoder->W_V, *W_O = decoder->W_O;
+    float *B_Q = decoder->B_Q, *B_K = decoder->B_K, *B_V = decoder->B_V, *B_O = decoder->B_O;
 
-    float *Q = decoder->Q;
-    float *K = decoder->K;
-    float *V = decoder->V;
+    float *W_ffn1 = decoder->W_ffn1, *W_ffn2 = decoder->W_ffn2;
+    float *B_ffn1 = decoder->B_ffn1, *B_ffn2 = decoder->B_ffn2;
+    
+    float *W_ln1 = decoder->W_ln1, *W_ln2 = decoder->W_ln2;
+    float *B_ln1 = decoder->B_ln1, *B_ln2 = decoder->B_ln2;
 
-    // Ready for computation
+    float *Q = decoder->Q, *K = decoder->K, *V = decoder->V;
+
+    // Residual Connection - Fanout
     memcpy(decoder->_buf_embedded, last_input, sizeof(float) * decoder->d_hidden);
     memcpy(decoder->_buf_ln1, last_input, sizeof(float) * decoder->d_hidden);
 
     // Layer Normalization
-    float ln1_avg = cblas_sdot(d_hidden, decoder->ones, 1, decoder->_buf_embedded, 1) / d_hidden;   // get average
-    cblas_saxpy(d_hidden, -ln1_avg, decoder->ones, 1, decoder->_buf_ln1, 1);                                                                           // x <- x-u
-    float ln1_std = cblas_snrm2(d_hidden, decoder->_buf_ln1, 1) / sqrtf(decoder->d_hidden);                                                                                    // std <- s(x)
-    memcpy(decoder->_buf_ln1_temp, decoder->B_ln1, sizeof(float) * d_hidden);
-    cblas_ssbmv(CblasRowMajor, CblasUpper, d_hidden, 0, 1.0/ln1_std, decoder->W_ln1, 1, decoder->_buf_ln1, 1, 1.0, decoder->_buf_ln1_temp, 1);                  // ln1_result <- ln1 .* x / std
-    memcpy(decoder->_buf_ln1, decoder->_buf_ln1_temp, sizeof(float) * d_hidden);
+    layer_normalize(d_hidden, decoder->_buf_ln1, W_ln1, B_ln1, decoder->_buf_ln1_temp, decoder->ones);
     
-    // Compute Q
-    cblas_sgemv(CblasRowMajor, CblasNoTrans, d_hidden, d_hidden, 1.0, W_Q, d_hidden, decoder->_buf_ln1, 1, 1.0, Q, 1);
-    
-    // Compute K, V
-    cblas_sgemv(CblasRowMajor, CblasNoTrans, d_hidden, d_hidden, 1.0, W_K, d_hidden, decoder->_buf_ln1, 1, 1.0, K + d_hidden * num_inferenced, 1);
-    
-    cblas_sgemv(CblasRowMajor, CblasNoTrans, d_hidden, d_hidden, 1.0, W_V, d_hidden, decoder->_buf_ln1, 1, 1.0, V + d_hidden * num_inferenced, 1);
+    // Compute QKV
+    layer_linear(d_hidden, d_hidden, decoder->_buf_ln1, W_Q, B_Q, Q);
+    layer_linear(d_hidden, d_hidden, decoder->_buf_ln1, W_K, B_K, K + d_hidden * num_inferenced);
+    layer_linear(d_hidden, d_hidden, decoder->_buf_ln1, W_V, B_V, V + d_hidden * num_inferenced);
 
     // Compute MHA
     for (int i=0; i<d_head; i++) {
@@ -159,50 +138,32 @@ void decoder_forward(decoder_t *decoder, float *last_input, float *last_output) 
         cblas_sgemv(CblasColMajor, CblasTrans, d_hid_per_head, num_inferenced+1, 1.0/sqrtf(d_hid_per_head), K + i * d_hid_per_head, d_hidden, Q + i * d_hid_per_head, 1, 0.0, decoder->_buf_attn, 1);
         
         // Softmax
-        float sm_max = decoder->_buf_attn[0];
-        for (int i=0; i<num_inferenced+1; i++) sm_max = (sm_max > decoder->_buf_attn[i] ? sm_max : decoder->_buf_attn[i]);
-        float sm_sum = 0;
-        for (int i=0; i<num_inferenced+1; i++) sm_sum += expf(decoder->_buf_attn[i] - sm_max);
-        
-        for (int i=0; i<num_inferenced+1; i++) decoder->_buf_attn[i] = expf(decoder->_buf_attn[i] - sm_max) / sm_sum;
-
-        // TODO: SIMD this.
+        layer_softmax(num_inferenced+1, decoder->_buf_attn);
 
         // SHA
         cblas_sgemv(CblasColMajor, CblasNoTrans, d_hid_per_head, num_inferenced+1, 1.0, V + i * d_hid_per_head, d_hidden, decoder->_buf_attn, 1, 0.0, decoder->_buf_sha + i * d_hid_per_head, 1);
     }
 
     // MHA
-    cblas_sgemv(CblasRowMajor, CblasNoTrans, d_hidden, d_hidden, 1.0, W_O, d_hidden, decoder->_buf_sha, 1, 1.0, decoder->_buf_o, 1);
+    layer_linear(d_hidden, d_hidden, decoder->_buf_sha, W_O, B_O, decoder->_buf_o);
 
-    // Residual Connection - raw input
+    // Residual Connection - Sum and Fanout
     cblas_saxpy(d_hidden, 1.0, decoder->_buf_o, 1, decoder->_buf_embedded, 1);
     memcpy(decoder->_buf_ln2, decoder->_buf_embedded, sizeof(float) * d_hidden);
 
     // Layer Norm
-    float ln2_avg = cblas_sdot(d_hidden, decoder->ones, 1, decoder->_buf_embedded, 1) / d_hidden;   // get average
-    cblas_saxpy(d_hidden, -ln2_avg, decoder->ones, 1, decoder->_buf_ln2, 1);                                                                           // x <- x-u
-    float ln2_std = cblas_snrm2(d_hidden, decoder->_buf_ln2, 1) / sqrtf(d_hidden);           
-    memcpy(decoder->_buf_ln2_temp, decoder->B_ln2, sizeof(float) * d_hidden);                                                                         // std <- s(x)
-    cblas_ssbmv(CblasRowMajor, CblasUpper, d_hidden, 0, 1.0/ln2_std, decoder->W_ln2, 1, decoder->_buf_ln2, 1, 1.0, decoder->_buf_ln2_temp, 1);                  // ln1_result <- ln1 .* x / std
-    memcpy(decoder->_buf_ln2, decoder->_buf_ln2_temp, sizeof(float) * d_hidden);
-
+    layer_normalize(d_hidden, decoder->_buf_ln2, W_ln2, B_ln2, decoder->_buf_ln2_temp, decoder->ones);
+    
     // FFN1
-    cblas_sgemv(CblasRowMajor, CblasNoTrans, d_ffn, d_hidden, 1.0, W_ffn1, d_hidden, decoder->_buf_ln2, 1, 1.0, decoder->_buf_ffn1, 1);
+    layer_linear(d_ffn, d_hidden, decoder->_buf_ln2, W_ffn1, B_ffn1, decoder->_buf_ffn1);
 
     // Activation: GeLU
-    // TODO: SIMD this.
-    for (int i=0; i<d_ffn; i+=4) {
-        decoder->_buf_ffn1[i] = 0.5 * decoder->_buf_ffn1[i] * (1 + tanh(sqrt(2.0 / M_PI) * (decoder->_buf_ffn1[i] + 0.044715 * powf(decoder->_buf_ffn1[i], 3))));
-        decoder->_buf_ffn1[i+1] = 0.5 * decoder->_buf_ffn1[i+1] * (1 + tanh(sqrt(2.0 / M_PI) * (decoder->_buf_ffn1[i+1] + 0.044715 * powf(decoder->_buf_ffn1[i+1], 3))));
-        decoder->_buf_ffn1[i+2] = 0.5 * decoder->_buf_ffn1[i+2] * (1 + tanh(sqrt(2.0 / M_PI) * (decoder->_buf_ffn1[i+2] + 0.044715 * powf(decoder->_buf_ffn1[i+2], 3))));
-        decoder->_buf_ffn1[i+3] = 0.5 * decoder->_buf_ffn1[i+3] * (1 + tanh(sqrt(2.0 / M_PI) * (decoder->_buf_ffn1[i+3] + 0.044715 * powf(decoder->_buf_ffn1[i+3], 3))));
-    }
+    layer_GeLU(d_ffn, decoder->_buf_ffn1);
 
     // FFN2
-    cblas_sgemv(CblasRowMajor, CblasNoTrans, d_hidden, d_ffn, 1.0, W_ffn2, d_ffn, decoder->_buf_ffn1, 1, 1.0, decoder->_buf_ffn2, 1);
+    layer_linear(d_hidden, d_ffn, decoder->_buf_ffn1, W_ffn2, B_ffn2, decoder->_buf_ffn2);
 
-    // Residual connection
+    // Residual connection - Sum
     cblas_saxpy(d_hidden, 1.0, decoder->_buf_ffn2, 1, decoder->_buf_embedded, 1);
 
     // Copy output
@@ -210,7 +171,6 @@ void decoder_forward(decoder_t *decoder, float *last_input, float *last_output) 
 
     // For next inference
     decoder->_num_inferenced_token++;
-    decoder_pre_forward(decoder);
 
     /* DEBUG FINISH */
     #ifdef DEBUG
@@ -230,29 +190,6 @@ void decoder_forward(decoder_t *decoder, float *last_input, float *last_output) 
     #endif
 }
 
-void decoder_set_debug_weight(decoder_t *decoder) {
-    int d_hidden = decoder->d_hidden;
-    int d_head = decoder->d_head;
-    int d_ffn = decoder->d_ffn;
-    int d_hid_per_head = d_hidden / d_head;
-
-    /* LN1 */
-    decoder->W_ln1;
-    for (int i=0; i<GPT2_D_HIDDEN; i++) {
-        decoder->W_ln1[i] = 78.3836385;
-        decoder->B_ln1[i] = 384.5 - i;
-    }
-    
-    /* Attention */
-    for (int i=0; i<GPT2_D_HIDDEN; i++) {       // select row
-        for (int j=0; j<GPT2_D_HIDDEN; j++) {   // select col
-            decoder->W_Q[i * GPT2_D_HIDDEN + j] = (float)i/GPT2_D_HIDDEN;
-            decoder->W_K[i * GPT2_D_HIDDEN + j] = (float)i/GPT2_D_HIDDEN;
-            decoder->W_V[i * GPT2_D_HIDDEN + j] = (float)i/GPT2_D_HIDDEN;
-        }
-    }
-}
-
 GPT2Model_t *new_GPT2Model(int num_decoders, int d_hidden, int d_head, int d_ffn) {
     GPT2Model_t *model = (GPT2Model_t *)malloc(sizeof(GPT2Model_t));
 
@@ -261,7 +198,7 @@ GPT2Model_t *new_GPT2Model(int num_decoders, int d_hidden, int d_head, int d_ffn
     model->d_head = d_head;
     model->d_ffn = d_ffn;
 
-    model->wte = (float *)malloc(sizeof(float) * GPT2_D_TOKENS * GPT2_D_HIDDEN);
+    model->wte = (float *)malloc(sizeof(float) * GPT2_D_VOCABS * GPT2_D_HIDDEN);
     model->wpe = (float *)malloc(sizeof(float) * GPT2_MAX_TOKEN * GPT2_D_HIDDEN);
     model->W_ln_f = (float *)malloc(sizeof(float) * GPT2_D_HIDDEN);
     model->B_ln_f = (float *)malloc(sizeof(float) * GPT2_D_HIDDEN);
@@ -273,15 +210,11 @@ GPT2Model_t *new_GPT2Model(int num_decoders, int d_hidden, int d_head, int d_ffn
 
     model->_num_inferenced_token = 0;
 
-    model->_buf_rawinput = (float *)malloc(sizeof(float) * GPT2_D_TOKENS);
-    model->_buf_position_onehot = (float *)malloc(sizeof(float) * GPT2_MAX_TOKEN);
+    model->_buf_rawinput = (float *)malloc(sizeof(float) * GPT2_D_VOCABS);
 
     model->_buf_input = (float *)malloc(sizeof(float) * model->d_hidden);
     model->_buf_ln_f = (float *)malloc(sizeof(float) * model->d_hidden);
-    model->_buf_ln_f_temp = (float *)malloc(sizeof(float) * model->d_hidden);
     model->_buf_output = (float *)malloc(sizeof(float) * model->d_hidden);
-
-    GPT2Model_pre_forward(model);
 
     return model;
 }
@@ -298,31 +231,37 @@ void free_GPT2Model(GPT2Model_t *model) {
     free(model->decoders);
 
     free(model->_buf_rawinput);
-    free(model->_buf_position_onehot);
 
     free(model->_buf_input);
     free(model->_buf_ln_f);
-    free(model->_buf_ln_f_temp);
     free(model->_buf_output);
 
     free(model);
 }
 
-void GPT2Model_pre_forward(GPT2Model_t *model) {
-    bzero(model->_buf_position_onehot, sizeof(float) * GPT2_MAX_TOKEN);
+void GPT2Model_sample(
+    GPT2Model_t *model, 
+    char *text, int length, int num_samples, int batch_size, 
+    float temperature, int top_k, int num_beam
+) {
+    float *input_embed = (float *)malloc(sizeof(float) * model->d_hidden);
+    float *output_embed = (float *)malloc(sizeof(float) * model->d_hidden);
+    float *logits = (float *)malloc(sizeof(float) * GPT2_D_VOCABS);
 
-    // Decoders pre-forward
-    for(int i=0; i<model->num_decoders; i++) {
-        decoder_pre_forward(model->decoders[i]);
+    int argmax = 29193;
+
+    for (int i=0; i<length; i++) {
+        GPT2Model_encode(model, argmax, input_embed);
+        GPT2Model_forward(model, input_embed, output_embed);
+        GPT2Model_decode(model, output_embed, logits);
+        argmax = vector_argmax(GPT2_D_VOCABS, logits, 1);
+        printf("next token: %d\n", argmax);
     }
 }
 
-int GPT2Model_forward(GPT2Model_t *model, int input_idx, float *output) {
-    // Input: float[GPT2_D_TOKEN], one-hot vector insisting only one token
+void GPT2Model_forward(GPT2Model_t *model, float *input_embed, float *output_embed) {
+    // Input: int, index of previous token
     // Output: float[GPT2_D_TOKEN], logits of next token
-
-    // Convert one-hot input to embedded token
-    // TODO: take simpler approach
 
     /* DEBUG START */
     #ifdef DEBUG
@@ -331,8 +270,11 @@ int GPT2Model_forward(GPT2Model_t *model, int input_idx, float *output) {
     gettimeofday(&start_time, NULL);
     #endif
 
-    memcpy(model->_buf_input, &model->wte[model->d_hidden * input_idx], sizeof(float) * model->d_hidden);
-    cblas_saxpy(model->d_hidden, 1.0, &model->wpe[model->d_hidden * model->_num_inferenced_token], 1, model->_buf_input, 1);
+    int d_hidden = model->d_hidden;
+
+    memcpy(model->_buf_input, input_embed, sizeof(float) * d_hidden);
+
+    cblas_saxpy(d_hidden, 1.0, &model->wpe[d_hidden * model->_num_inferenced_token], 1, model->_buf_input, 1);
 
     for (int i=0; i<model->num_decoders; i++) {
         decoder_forward(model->decoders[i], model->_buf_input, model->_buf_output);
@@ -346,29 +288,12 @@ int GPT2Model_forward(GPT2Model_t *model, int input_idx, float *output) {
     model->_buf_output = model->_buf_swap;
 
     // Layer Normalization (final)
-    int d_hidden = model->d_hidden;
+    layer_normalize(d_hidden, model->_buf_output, model->W_ln_f, model->B_ln_f, model->_buf_ln_f, model->decoders[0]->ones);
 
-    memcpy(model->_buf_ln_f, model->_buf_output, sizeof(float) * d_hidden);
-    float ln_f_avg = cblas_sdot(d_hidden, model->decoders[0]->ones, 1, model->_buf_ln_f, 1) / d_hidden;   // get average
-    cblas_saxpy(d_hidden, -ln_f_avg, model->decoders[0]->ones, 1, model->_buf_ln_f, 1);                                                                                 // x <- x-u
-    float ln_f_std = cblas_snrm2(d_hidden, model->_buf_ln_f, 1) / sqrtf(d_hidden);                                                                                      // std <- s(x)
-    memcpy(model->_buf_ln_f_temp, model->B_ln_f, sizeof(float) * d_hidden);
-    cblas_ssbmv(CblasRowMajor, CblasUpper, d_hidden, 0, 1.0/ln_f_std, model->W_ln_f, 1, model->_buf_ln_f, 1, 1.0, model->_buf_ln_f_temp, 1);                            // ln1_result <- ln1 .* x / std
-    memcpy(model->_buf_ln_f, model->_buf_ln_f_temp, sizeof(float) * d_hidden);
-
-    // Find the most close token
-    // - It takes almost 1/4 of latency!
-    // cblas_sgemv(
-    //     CblasRowMajor, CblasNoTrans, 
-    //     GPT2_D_TOKENS, model->d_hidden, 
-    //     1.0, model->wte, model->d_hidden,
-    //     model->_buf_ln_f, 1,
-    //     0.0, output, 1    
-    // );
-    fast_sgemv(GPT2_D_TOKENS, model->d_hidden, 1.0, model->wte, model->_buf_ln_f, 0.0, output);
+    // Output
+    memcpy(output_embed, model->_buf_output, sizeof(float) * d_hidden);
 
     model->_num_inferenced_token++;
-    GPT2Model_pre_forward(model);
 
     /* DEBUG FINISH */
     #ifdef DEBUG
@@ -378,6 +303,14 @@ int GPT2Model_forward(GPT2Model_t *model, int input_idx, float *output) {
     model->_debug_eta_total += eta;
     model->_debug_eta_last = eta;
     #endif
+}
+
+void GPT2Model_encode(GPT2Model_t *model, int vocab_idx, float *embedded) {
+    memcpy(embedded, &model->wte[model->d_hidden * vocab_idx], sizeof(float) * model->d_hidden);
+}
+
+void GPT2Model_decode(GPT2Model_t *model, float *embedded, float *logits) {
+    cblas_sgemv(CblasRowMajor, CblasNoTrans, GPT2_D_VOCABS, model->d_hidden, 1.0, model->wte, model->d_hidden, embedded, 1, 0.0, logits, 1);
 }
 
 float *find_tensor_target_p(GPT2Model_t *model, char *tensor_name) {
@@ -528,26 +461,5 @@ void GPT2Model_load(GPT2Model_t *model, char *weight_path) {
 
     fclose(fp);
 
-    GPT2Model_pre_forward(model);
     return;
-}
-
-int vector_argmax(int m, float *x, int incx) {
-    int arg = 0;
-    float max = INT32_MIN;
-    int idx = 0;
-    for (int i=0; i<m; i++) {
-        if (*(x + i * incx) > max) {
-            max = *(x + i * incx);
-            arg = i;
-        }
-        idx += incx;
-    }
-
-    return arg;
-}
-
-void vector_onehot(float* dest, int n, int idx) {
-    bzero(dest, sizeof(float) * n);
-    dest[idx] = 1;
 }
