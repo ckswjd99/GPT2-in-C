@@ -147,14 +147,11 @@ void decoder_forward(decoder_t *decoder, float *last_input, float *last_output) 
     
     // Compute Q
     cblas_sgemv(CblasRowMajor, CblasNoTrans, d_hidden, d_hidden, 1.0, W_Q, d_hidden, decoder->_buf_ln1, 1, 1.0, Q, 1);
-    // sgemv_custom(d_hidden, d_hidden, W_Q, decoder->_buf_ln1, Q);
     
     // Compute K, V
     cblas_sgemv(CblasRowMajor, CblasNoTrans, d_hidden, d_hidden, 1.0, W_K, d_hidden, decoder->_buf_ln1, 1, 1.0, K + d_hidden * num_inferenced, 1);
-    // sgemv_custom(d_hidden, d_hidden, W_K, decoder->_buf_ln1, K + d_hidden * num_inferenced);
     
     cblas_sgemv(CblasRowMajor, CblasNoTrans, d_hidden, d_hidden, 1.0, W_V, d_hidden, decoder->_buf_ln1, 1, 1.0, V + d_hidden * num_inferenced, 1);
-    // sgemv_custom(d_hidden, d_hidden, W_V, decoder->_buf_ln1, V + d_hidden * num_inferenced);
 
     // Compute MHA
     for (int i=0; i<d_head; i++) {
@@ -173,7 +170,6 @@ void decoder_forward(decoder_t *decoder, float *last_input, float *last_output) 
 
         // SHA
         cblas_sgemv(CblasColMajor, CblasNoTrans, d_hid_per_head, num_inferenced+1, 1.0, V + i * d_hid_per_head, d_hidden, decoder->_buf_attn, 1, 0.0, decoder->_buf_sha + i * d_hid_per_head, 1);
-        // sgemv_custom(d_hid_per_head, num_inferenced+1, V + i * d_hid_per_head, decoder->_buf_attn, decoder->_buf_sha + i * d_hid_per_head);
     }
 
     // MHA
@@ -369,7 +365,7 @@ int GPT2Model_forward(GPT2Model_t *model, int input_idx, float *output) {
     //     model->_buf_ln_f, 1,
     //     0.0, output, 1    
     // );
-    sgemv_custom(GPT2_D_TOKENS, model->d_hidden, 1.0, model->wte, model->_buf_ln_f, 0.0, output);
+    fast_sgemv(GPT2_D_TOKENS, model->d_hidden, 1.0, model->wte, model->_buf_ln_f, 0.0, output);
 
     model->_num_inferenced_token++;
     GPT2Model_pre_forward(model);

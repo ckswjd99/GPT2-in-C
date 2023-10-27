@@ -1,19 +1,19 @@
 SOURCE := $(wildcard *.c)
 TARGETS = $(SOURCE:.c=)
 
-AVX2=1
-NEON=0
+AVX2=0
+NEON=1
 
-DEBUG=0
+DEBUG=1
 
-CC=gcc
+CC=gcc -g
 
-CFLAGS=-mavx
-LDFLAGS=
+CFLAGS=
+LDFLAGS=-lopenblas
 OPTS=-march=native -funroll-loops
 
 ifeq ($(AVX2), 1)
-OPTS+=-mavx2 -mfma -DAVX2
+OPTS+=-mavx -mavx2 -mfma -DAVX2
 endif
 
 ifeq ($(NEON), 1)
@@ -26,4 +26,4 @@ $(TARGETS): $(SOURCE)
 	$(CC) $(CFLAGS) $(OPTS) $@.c -o $@.out $(LDFLAGS)
 
 clean:
-	rm $(addsuffix ".out", $(TARGETS))
+	rm $(addsuffix .out, $(TARGETS))
