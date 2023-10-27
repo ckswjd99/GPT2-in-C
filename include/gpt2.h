@@ -28,9 +28,19 @@
 
 #define LOAD_BUFFER_SIZE    256
 
+typedef struct tokenizer_t tokenizer_t;
 typedef struct decoder_t decoder_t;
 typedef struct GPT2Model_t GPT2Model_t;
 
+struct tokenizer_t {
+    int d_vocab;
+    char **vocabs;
+    int eos_idx;
+};
+
+tokenizer_t *new_tokenizer(int d_vocab, char *dict_path);
+void free_tokenizer(tokenizer_t *tokenizer);
+char *tokenizer_decode(tokenizer_t *tokenizer, int vocab_idx);
 
 struct decoder_t {
     /* CONFIGS */
@@ -135,7 +145,7 @@ GPT2Model_t *new_GPT2Model(int num_decoders, int d_hidden, int d_head, int d_ffn
 void free_GPT2Model(GPT2Model_t *model);
 
 void GPT2Model_sample(
-    GPT2Model_t *model, 
+    GPT2Model_t *model, tokenizer_t *tokenizer,
     char *text, int length, int num_samples, int batch_size, 
     float temperature, int top_k, int num_beam
 );

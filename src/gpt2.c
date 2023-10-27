@@ -1,5 +1,50 @@
 #include "gpt2.h"
 
+tokenizer_t *new_tokenizer(int d_vocab, char *dict_path) {
+    fprintf(stdout, "Loading GPT2 tokenizer from %s\n", dict_path);
+
+    tokenizer_t *tokenizer = (tokenizer_t *)malloc(sizeof(tokenizer_t));
+
+    tokenizer->d_vocab = d_vocab;
+    tokenizer->vocabs = (char **)malloc(sizeof(char *) * d_vocab);
+
+    FILE *dict_file = fopen(dict_path, "r");
+    char buffer[LOAD_BUFFER_SIZE] = {0,};
+    int idx = 0;
+    while (fgets(buffer, LOAD_BUFFER_SIZE, dict_file) != NULL) {
+        if (strcmp(buffer, "\\n\n") == 0) strcpy(buffer, "\n\n");
+        else if (strcmp(buffer, "\\n\\n\n") == 0) strcpy(buffer, "\n\n\n");
+        else if (strcmp(buffer, "\\t\n") == 0) strcpy(buffer, "\t\n");
+        else if (strcmp(buffer, "<|endoftext|>\n") == 0) {
+            tokenizer->eos_idx = idx;
+            continue;
+        }
+        int len = strlen(buffer)+1;
+        tokenizer->vocabs[idx] = (char *)malloc(sizeof(char) * len);
+        strcpy(tokenizer->vocabs[idx], buffer);
+        tokenizer->vocabs[idx][strlen(buffer)-1] = '\0';
+        idx++;
+    }
+
+    fprintf(stdout, "  Finished loading tokneizer!\n\n");
+
+    fclose(dict_file);
+
+    return tokenizer;
+}
+
+void free_tokenizer(tokenizer_t *tokenizer) {
+    for (int i=0; i<tokenizer->d_vocab; i++) {
+        free(tokenizer->vocabs[i]);
+    }
+    free(tokenizer->vocabs);
+    free(tokenizer);
+}
+
+char *tokenizer_decode(tokenizer_t *tokenizer, int vocab_idx) {
+    return tokenizer->vocabs[vocab_idx];
+}
+
 decoder_t *new_decoder(int d_hidden, int d_head, int d_ffn) {
     decoder_t *decoder = (decoder_t *)malloc(sizeof(decoder_t));
     
@@ -240,7 +285,7 @@ void free_GPT2Model(GPT2Model_t *model) {
 }
 
 void GPT2Model_sample(
-    GPT2Model_t *model, 
+    GPT2Model_t *model, tokenizer_t *tokenizer,
     char *text, int length, int num_samples, int batch_size, 
     float temperature, int top_k, int num_beam
 ) {
@@ -249,14 +294,18 @@ void GPT2Model_sample(
     float *logits = (float *)malloc(sizeof(float) * GPT2_D_VOCABS);
 
     int argmax = 29193;
+    printf("==================== OUTPUT TEXT ====================\n");
+    printf("%s", tokenizer_decode(tokenizer, argmax));
 
     for (int i=0; i<length; i++) {
         GPT2Model_encode(model, argmax, input_embed);
         GPT2Model_forward(model, input_embed, output_embed);
         GPT2Model_decode(model, output_embed, logits);
         argmax = vector_argmax(GPT2_D_VOCABS, logits, 1);
-        printf("next token: %d\n", argmax);
+        // printf("next token: %d\n", argmax);
+        printf("%s", tokenizer_decode(tokenizer, argmax));
     }
+    printf("\n===================================================\n\n");
 }
 
 void GPT2Model_forward(GPT2Model_t *model, float *input_embed, float *output_embed) {
@@ -457,7 +506,7 @@ void GPT2Model_load(GPT2Model_t *model, char *weight_path) {
 
     }
 
-    fprintf(stdout, "Finished loading weights!\n");
+    fprintf(stdout, "  Finished loading weights!\n\n");
 
     fclose(fp);
 

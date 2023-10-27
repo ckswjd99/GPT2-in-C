@@ -26,11 +26,12 @@ int main(int argc, char *argv[]) {
     struct timeval start_time, end_time;
 
     GPT2Model_t *gpt2_model = new_GPT2Model(GPT2_NUM_DECODERS, GPT2_D_HIDDEN, GPT2_D_HEAD, GPT2_D_FFN);
-
     GPT2Model_load(gpt2_model, "./model/GPT2-124M.mymodel");
 
+    tokenizer_t *tokenizer = new_tokenizer(GPT2_D_VOCABS, "./vocabs.txt");
+
     gettimeofday(&start_time, NULL);
-    GPT2Model_sample(gpt2_model, NULL, gen_length, 0, 0, 0, 0, 0);
+    GPT2Model_sample(gpt2_model, tokenizer, NULL, gen_length, 0, 0, 0, 0, 0);
     gettimeofday(&end_time, NULL);
 
     printf("Inferenced with GPT2Model\n");
