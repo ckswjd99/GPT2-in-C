@@ -31,6 +31,7 @@ $ python ./model_converter.py
 
 or
 
+$ cd ./model
 $ wget https://huggingface.co/ckswjd99/GPT2-in-C/resolve/main/GPT2-124M.mymodel
 ```
 
