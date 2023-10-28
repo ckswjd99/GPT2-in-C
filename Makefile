@@ -20,9 +20,6 @@ make: $(OBJS)
 $(OBJS): $(OBJDIR)%.o: src/%.c $(DEPS) $(OBJDIR)
 	$(CC) $(COMMON) $(OPTS) -c $< -o $@ -l$(BLASLIB) -lm
 
-$(OBJDIR)gpt2.o: $(OBJDIR)
-	$(CC) $(COMMON) $(OPTS) src/gpt2.c -c -o $(OBJDIR)gpt2.o -l$(BLASLIB) -lm
-
 $(OBJDIR):
 	mkdir obj
 
