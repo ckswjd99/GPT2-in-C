@@ -2,7 +2,7 @@
 
 GPT2 model running in C language.
 
-It generates 64 tokens in 8.x seconds on Raspberry Pi 4, which is SOTA performance.
+It generates 64 tokens in 8.x seconds on Raspberry Pi 4, which is SOTA and lower bound of performance.
 
 ## Requirements
 
