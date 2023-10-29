@@ -54,13 +54,13 @@ Loading GPT2 weights from ./model/GPT2-124M.mymodel
 Loading GPT2 tokenizer from ./vocabs.txt
   Finished loading tokneizer!
 
-==================== OUTPUT TEXT ====================
+==================== OUTPUT TEXT  0 ====================
 Scientists, who have been studying the effects of the sun's radiation on the body, have found that the sun's rays are able to penetrate the skin and cause wrinkles and wrinkles.
 
 The researchers found that the sun's rays can penetrate the skin and cause wrinkles and wrinkles.
 
-"The sun's rays are able
-===================================================
+"The sun's rays are
+=======================================================
 
 Inferenced with GPT2Model
 Total ETA: 8070.774000 (ms)
