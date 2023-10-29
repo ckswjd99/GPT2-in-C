@@ -1,9 +1,11 @@
-#include <string.h>
-#include <stdlib.h>
-#include <stdio.h>
 #include <sys/time.h>
+
 #include <math.h>
+#include <stdio.h>
+#include <assert.h>
 #include <limits.h>
+#include <stdlib.h>
+#include <string.h>
 
 #define GPT2_D_VOCABS       50257
 #define GPT2_D_HIDDEN       768
@@ -22,6 +24,7 @@
 #define INT32_MIN INT_MIN
 #endif
 
+#include "utils.h"
 #include "operation.h"
 
 #define DECODER_NUM_TOKEN_INIT  256
@@ -48,6 +51,7 @@ struct decoder_t {
     int d_hidden;
     int d_head;
     int d_ffn;
+    int d_batch;
 
     /* PARAMS */
     // Utils
@@ -86,16 +90,17 @@ struct decoder_t {
 
     /* BUFFERS */
     int _num_inferenced_token;
-    float *_mem_start;
+    float *_mem_start_utils;
+    float *_mem_start_weights;
+    float *_mem_start_buffers;
+    float *_mem_start_features;
     float *_buf_embedded;
+    float *_buf_layer_norm;
     float *_buf_ln1;
-    float *_buf_ln1_temp;
-    float *_buf_q;
     float *_buf_sha;
     float *_buf_o;
     float *_buf_attn;
     float *_buf_ln2;
-    float *_buf_ln2_temp;
     float *_buf_ffn1;
     float *_buf_ffn2;
 
@@ -108,15 +113,17 @@ struct decoder_t {
     #endif
 };
 
-decoder_t *new_decoder(int d_hidden, int d_head, int d_ffn);
+decoder_t *new_decoder(int d_hidden, int d_head, int d_ffn, int d_batch);
 void free_decoder(decoder_t *decoder);
 void decoder_forward(decoder_t *decoder, float *last_input, float *last_output);
+void decoder_forward_batch(decoder_t *decoder, int batch_size, float *last_input, float *last_output);
 
 struct GPT2Model_t {
     int num_decoders;
     int d_hidden;
     int d_head;
     int d_ffn;
+    int d_batch;
 
     float *wte;
     float *wpe;
@@ -142,15 +149,17 @@ struct GPT2Model_t {
     #endif
 };
 
-GPT2Model_t *new_GPT2Model(int num_decoders, int d_hidden, int d_head, int d_ffn);
+GPT2Model_t *new_GPT2Model(int num_decoders, int d_hidden, int d_head, int d_ffn, int d_batch);
 void free_GPT2Model(GPT2Model_t *model);
 
 void GPT2Model_sample(
     GPT2Model_t *model, tokenizer_t *tokenizer,
     char *text, int length, int num_samples, int batch_size, 
-    float temperature, int top_k, int num_beam
+    float temperature, int top_k, int num_beam,
+    int verbose
 );
 void GPT2Model_encode(GPT2Model_t *model, int vocab_idx, float *embedded);
 void GPT2Model_forward(GPT2Model_t *model, float *input_embed, float *output_embed);
+void GPT2Model_forward_batch(GPT2Model_t *model, int batch_size, float *input_embed, float *output_embed);
 void GPT2Model_decode(GPT2Model_t *model, float *embedded, float *logits);
 void GPT2Model_load(GPT2Model_t *model, char *weight_path);

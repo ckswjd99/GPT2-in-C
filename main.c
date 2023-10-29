@@ -2,14 +2,18 @@
 
 int main(int argc, char *argv[]) {
     /* ARGPARSE */
-    if (argc < 2) {
-        printf("Usage: %s [length]\n", argv[0]);
+    if (argc < 3) {
+        printf("Usage: %s [length] [batch_size]\n", argv[0]);
         exit(1);
     }
 
     int gen_length = atoi(argv[1]);
     if (gen_length < 1) gen_length = 1;
     if (gen_length > 512) gen_length = 512;
+
+    int batch_size = atoi(argv[2]);
+    if (batch_size < 1) batch_size = 1;
+    if (batch_size > 8) batch_size = 8;
 
     /* DEBUG */
     #ifdef DEBUG
@@ -25,13 +29,13 @@ int main(int argc, char *argv[]) {
 
     struct timeval start_time, end_time;
 
-    GPT2Model_t *gpt2_model = new_GPT2Model(GPT2_NUM_DECODERS, GPT2_D_HIDDEN, GPT2_D_HEAD, GPT2_D_FFN);
+    GPT2Model_t *gpt2_model = new_GPT2Model(GPT2_NUM_DECODERS, GPT2_D_HIDDEN, GPT2_D_HEAD, GPT2_D_FFN, batch_size);
     GPT2Model_load(gpt2_model, "./model/GPT2-124M.mymodel");
 
     tokenizer_t *tokenizer = new_tokenizer(GPT2_D_VOCABS, "./vocabs.txt");
 
     gettimeofday(&start_time, NULL);
-    GPT2Model_sample(gpt2_model, tokenizer, NULL, gen_length, 0, 0, 0, 0, 0);
+    GPT2Model_sample(gpt2_model, tokenizer, NULL, gen_length, 0, batch_size, 0, 0, 0, 0);
     gettimeofday(&end_time, NULL);
 
     printf("Inferenced with GPT2Model\n");

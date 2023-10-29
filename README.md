@@ -38,15 +38,15 @@ $ wget https://huggingface.co/ckswjd99/GPT2-in-C/resolve/main/GPT2-124M.mymodel
 ## Run
 
 ```
-Usage: ./main.out [length]
+Usage: ./main.out [length] [batch_size]
 ```
 
-Most options (context, batch, temperature, beam search, etc.) are not available at this time. You can test the generation of text starting with "Scientists", or alternatively by replacing the start token in `main.c`.
+Most options(context, temperature, beam search, etc.) are not available at this time. You can test the generation of text starting with some tokens(i.e. "Scientists"), or alternatively by replacing the start tokens in `gpt2.c`.
 
-Here is an example with 128 tokens generated, which is identical to the output from the PyTorch version.
+Here is an example with 64 tokens generated, which is identical to the output from the PyTorch version.
 
 ```
-$ ./main.out 64
+$ ./main.out 64 1
 Loading GPT2 weights from ./model/GPT2-124M.mymodel
   Number of tensors: 196
   Finished loading weights!
