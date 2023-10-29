@@ -63,6 +63,6 @@ The researchers found that the sun's rays can penetrate the skin and cause wrink
 ===================================================
 
 Inferenced with GPT2Model
-Total ETA: 8281.773000 (ms)
+Total ETA: 8070.774000 (ms)
 ```
 
