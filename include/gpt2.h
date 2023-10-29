@@ -28,6 +28,7 @@
 
 #define LOAD_BUFFER_SIZE    256
 
+typedef struct tensor_t tensor_t;
 typedef struct tokenizer_t tokenizer_t;
 typedef struct decoder_t decoder_t;
 typedef struct GPT2Model_t GPT2Model_t;

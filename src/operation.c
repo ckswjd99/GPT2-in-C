@@ -1,4 +1,48 @@
-#include "operation.h"
+#include "gpt2.h"
+
+unsigned int dtype_to_bytesize(int dtype) {
+    switch (dtype) {
+        case DTYPE_INT8:
+            return 1;
+        case DTYPE_FP16:
+            return 2;
+        case DTYPE_FP32:
+            return 4;
+        case DTYPE_FP64:
+            return 8;
+        default:
+            return 0;
+    }
+}
+
+tensor_t *new_tensor(int dtype, unsigned int dims, ...) {
+    tensor_t *tensor = (tensor_t *)malloc(sizeof(tensor_t));
+    
+    tensor->dtype = dtype;
+    tensor->dtype_bytesize = dtype_to_bytesize(dtype);
+
+    tensor->dims = dims;
+    va_list args;
+    va_start(args, dims);
+
+    unsigned int tensor_bytesize = tensor->dtype_bytesize;
+    for (int i=0; i<dims; i++) {
+        tensor->shape[i] = va_arg(args, unsigned int);
+        tensor_bytesize *= tensor->shape[i];
+    }
+    va_end(args);
+    tensor->data = (float *)malloc(tensor_bytesize);
+    tensor->tensor_bytesize = tensor_bytesize;
+
+    bzero(tensor->data, tensor_bytesize);
+    
+    return tensor;
+}
+
+void free_tensor(struct tensor_t *tensor) {
+    free(tensor->data);
+    free(tensor);
+}
 
 void layer_normalize(int N, float *vector, float *W, float *B, float *buf_sizeN, float *ones) {
     float avg = cblas_sdot(N, ones, 1, vector, 1) / N;
