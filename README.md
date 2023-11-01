@@ -1,4 +1,4 @@
-# GPT-in-C
+# GPT2-in-C
 
 GPT2 model running in C language.
 
